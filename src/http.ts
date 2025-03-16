@@ -2,6 +2,7 @@ import { HttpApiBuilder, HttpApiScalar, HttpServer } from "@effect/platform";
 import { Layer, pipe } from "effect";
 import { Api } from "./api";
 import { HttpRootLive } from "./routes/root/http";
+import { TraceLive, withActiveSpan } from "./services/tracer";
 
 export const ApiLive = Layer.provide(HttpApiBuilder.api(Api), [HttpRootLive]);
 
@@ -16,4 +17,8 @@ export const HttpAppLive = pipe(
 	),
 	Layer.provideMerge(HttpServer.layerContext),
 	Layer.provideMerge(ApiLive),
+
+	// Tracing Options
+	Layer.provideMerge(TraceLive),
+	withActiveSpan,
 );

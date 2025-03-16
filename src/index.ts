@@ -1,32 +1,27 @@
-import * as EffectOpenTelemetryTracer from "@effect/opentelemetry/Tracer";
-import {
-	FetchHttpClient,
-	HttpApiBuilder,
-	HttpMiddleware,
-	HttpServer,
-} from "@effect/platform";
-import { type ResolveConfigFn, instrument } from "@microlabs/otel-cf-workers";
-import { trace } from "@opentelemetry/api";
-import { ConfigProvider, Layer, Logger, pipe } from "effect";
-import { ApiLive, HttpAppLive } from "./http";
-import { TracingOtelLive } from "./tracing";
+import * as HttpApiBuilder from "@effect/platform/HttpApiBuilder";
+import type { ResolveConfigFn } from "@microlabs/otel-cf-workers";
+import { instrument } from "@microlabs/otel-cf-workers";
 
-const config: ResolveConfigFn = (env: Env) => {
+import { HttpAppLive } from "./http";
+import { SERVICE_NAME, tracerHttpMiddleware } from "./services/tracer";
+
+declare global {
+	// eslint-disable-next-line no-var
+	var env: Env;
+}
+
+const config: ResolveConfigFn = (_env: Env, _trigger) => {
 	return {
 		exporter: {
 			url: "http://localhost:4318/v1/traces",
+			headers: {},
 		},
-		service: { name: "otel-worker-template" },
+		sampling: {
+			headSampler: { ratio: 1 },
+		},
+		service: { name: SERVICE_NAME },
 	};
 };
-
-const LiveApp = (env: Env, _context: ExecutionContext, _request?: Request) =>
-	Layer.mergeAll(
-		FetchHttpClient.layer,
-		Layer.setConfigProvider(ConfigProvider.fromJson(env)),
-		TracingOtelLive,
-		Logger.replace(Logger.defaultLogger, Logger.jsonLogger),
-	);
 
 export const workerHandler = {
 	async fetch(
@@ -34,24 +29,16 @@ export const workerHandler = {
 		env: Env,
 		context: ExecutionContext,
 	): Promise<Response> {
-		return HttpApiBuilder.toWebHandler(
-			Layer.mergeAll(ApiLive, HttpServer.layerContext).pipe(
-				Layer.provide(
-					LiveApp(env, context, request).pipe(
-						Layer.withParentSpan(
-							EffectOpenTelemetryTracer.makeExternalSpan(
-								// biome-ignore lint/style/noNonNullAssertion: <explanation>
-								trace
-									.getActiveSpan()!
-									.spanContext(),
-							),
-						),
-					),
-				),
-			),
-			{ middleware: HttpMiddleware.logger },
-		).handler(request);
+		Object.assign(globalThis, {
+			env,
+		});
+
+		const handler = HttpApiBuilder.toWebHandler(HttpAppLive, {
+			middleware: tracerHttpMiddleware,
+		});
+
+		return handler.handler(request);
 	},
 };
 
-export default instrument(workerHandler, config) satisfies ExportedHandler<Env>;
+export default instrument(workerHandler, config);
